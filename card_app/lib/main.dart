@@ -8,6 +8,7 @@ import 'dart:ui';
 import 'models.dart';
 import 'api_service.dart';
 
+
 void main() {
   runApp(const MyApp());
 }
@@ -18,9 +19,8 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: '卡片记忆助手 Ultimate',
+      title: '卡片记忆助手 Pro',
       theme: ThemeData(primarySwatch: Colors.blue, useMaterial3: true),
-      // 允许鼠标拖拽
       scrollBehavior: const MaterialScrollBehavior().copyWith(
         dragDevices: {
           PointerDeviceKind.mouse,
@@ -29,13 +29,115 @@ class MyApp extends StatelessWidget {
           PointerDeviceKind.trackpad,
         },
       ),
-      home: const CardListPage(),
+      // 默认先进入登录页
+      home: const LoginPage(),
     );
   }
 }
 
 // ==========================================
-// 1. 列表页 (CardListPage)
+// 0. 登录页 (LoginPage) - 新增
+// ==========================================
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
+
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  final _usernameCtrl = TextEditingController();
+  final _passwordCtrl = TextEditingController();
+  bool _isRegistering = false;
+  String _message = '';
+
+  Future<void> _submit() async {
+    final username = _usernameCtrl.text.trim();
+    final password = _passwordCtrl.text.trim();
+    
+    if (username.isEmpty || password.isEmpty) {
+      setState(() => _message = '请输入用户名和密码');
+      return;
+    }
+
+    setState(() => _message = '正在处理...');
+
+    if (_isRegistering) {
+      // 注册逻辑
+      final error = await ApiService.register(username, password);
+      if (error == null) {
+        setState(() {
+          _isRegistering = false; // 注册成功切回登录
+          _message = '注册成功，请登录';
+          _passwordCtrl.clear();
+        });
+      } else {
+        setState(() => _message = error);
+      }
+    } else {
+      // 登录逻辑
+      final success = await ApiService.login(username, password);
+      if (success) {
+        if (!mounted) return;
+        // 登录成功，跳转到主列表页
+        Navigator.pushReplacement(
+          context, 
+          MaterialPageRoute(builder: (_) => const CardListPage())
+        );
+      } else {
+        setState(() => _message = '登录失败，用户名或密码错误');
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: 400),
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.lock_person, size: 80, color: Colors.blue),
+              const SizedBox(height: 20),
+              Text(_isRegistering ? '注册账号' : '用户登录', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 30),
+              TextField(controller: _usernameCtrl, decoration: const InputDecoration(labelText: '用户名', border: OutlineInputBorder(), prefixIcon: Icon(Icons.person))),
+              const SizedBox(height: 16),
+              TextField(controller: _passwordCtrl, obscureText: true, decoration: const InputDecoration(labelText: '密码', border: OutlineInputBorder(), prefixIcon: Icon(Icons.key))),
+              const SizedBox(height: 10),
+              Text(_message, style: TextStyle(color: _message.contains('成功') ? Colors.green : Colors.red)),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: ElevatedButton(
+                  onPressed: _submit, 
+                  child: Text(_isRegistering ? '立即注册' : '登 录'),
+                ),
+              ),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _isRegistering = !_isRegistering;
+                    _message = '';
+                  });
+                }, 
+                child: Text(_isRegistering ? '已有账号？去登录' : '没有账号？去注册')
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// 1. 列表页 (CardListPage) - 修改头部添加注销
 // ==========================================
 class CardListPage extends StatefulWidget {
   const CardListPage({super.key});
@@ -44,6 +146,7 @@ class CardListPage extends StatefulWidget {
 }
 
 class _CardListPageState extends State<CardListPage> {
+  // ... 原有的状态变量 ...
   List<CardModel> _allCards = [];
   List<String> _availableGroups = [];
   List<String> _availableTags = [];
@@ -66,12 +169,11 @@ class _CardListPageState extends State<CardListPage> {
 
   void _startTimer() {
     _stopTimer();
-    // === 修改 1：同步间隔改为 3 秒 ===
     _timer = Timer.periodic(const Duration(seconds: 3), (timer) {
       _fetchData(silent: true);
     });
   }
-
+  
   void _stopTimer() {
     _timer?.cancel();
     _timer = null;
@@ -91,10 +193,20 @@ class _CardListPageState extends State<CardListPage> {
         });
       }
     } catch (e) {
-      if (mounted && !silent) setState(() => _isLoading = false);
+      if (e.toString().contains('AuthError')) {
+        // 如果遇到 Token 失效，强制退回登录页
+        _stopTimer();
+        if (mounted) {
+          ApiService.logout();
+          Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginPage()));
+        }
+      } else {
+        if (mounted && !silent) setState(() => _isLoading = false);
+      }
     }
   }
 
+  // ... _showConfirmDialog, _showManageDialog, _toggleCompletion 保持不变 ...
   Future<bool> _showConfirmDialog(String title, String content) async {
     return await showDialog<bool>(
       context: context,
@@ -108,7 +220,10 @@ class _CardListPageState extends State<CardListPage> {
       ),
     ) ?? false;
   }
+  // ... 省略中间未修改的辅助函数 (请将之前的辅助函数原样复制过来) ...
+  // 为了篇幅，我假设你保留了之前的 _showManageDialog, _toggleCompletion 等函数
 
+  // 下面是 _showManageDialog 和 _toggleCompletion 的实现 (为了确保你能直接复制，还是贴一下吧)
   void _showManageDialog(String type) {
     _stopTimer();
     final isGroup = type == 'group';
@@ -188,6 +303,7 @@ class _CardListPageState extends State<CardListPage> {
 
   @override
   Widget build(BuildContext context) {
+    // 筛选逻辑保持不变
     List<CardModel> filtered;
     if (_currentGroup == 'ALL') {
       filtered = List.from(_allCards);
@@ -198,6 +314,7 @@ class _CardListPageState extends State<CardListPage> {
     final incompleteCards = filtered.where((c) => !c.isCompleted).toList();
     final completedCards = filtered.where((c) => c.isCompleted).toList();
 
+    // 排序逻辑保持不变
     incompleteCards.sort((a, b) {
       final aTime = a.nextReminderTime;
       final bTime = b.nextReminderTime;
@@ -206,7 +323,6 @@ class _CardListPageState extends State<CardListPage> {
       if (aTime != null && bTime != null) return aTime.compareTo(bTime);
       return b.createdAt.compareTo(a.createdAt);
     });
-
     completedCards.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
     return Scaffold(
@@ -217,6 +333,22 @@ class _CardListPageState extends State<CardListPage> {
               decoration: BoxDecoration(color: Theme.of(context).primaryColor),
               child: const Center(child: Text('分组视图', style: TextStyle(color: Colors.white, fontSize: 24))),
             ),
+            // === 修改：增加“退出登录”按钮 ===
+            ListTile(
+              leading: const Icon(Icons.logout, color: Colors.red),
+              title: const Text('退出登录', style: TextStyle(color: Colors.red)),
+              onTap: () {
+                _stopTimer();
+                ApiService.logout();
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const LoginPage()),
+                  (route) => false
+                );
+              },
+            ),
+            const Divider(),
+            // === 结束修改 ===
+            
             Expanded(
               child: ListView(
                 padding: EdgeInsets.zero,
@@ -258,9 +390,6 @@ class _CardListPageState extends State<CardListPage> {
       body: _isLoading 
           ? const Center(child: CircularProgressIndicator()) 
           : SingleChildScrollView(
-              // === 关键修复 2：增加底部内边距 ===
-              // 这里的 120 像素是为了保证列表内容永远不会被 FAB 遮挡
-              // 同时也给了 ExpansionTile 展开动画足够的缓冲空间，防止 14px 溢出
               padding: const EdgeInsets.only(bottom: 120),
               child: Column(
                 children: [
@@ -300,7 +429,19 @@ class _CardListPageState extends State<CardListPage> {
   }
 
   Widget _buildCardItem(CardModel card) {
-    final isDue = card.isDue;
+    // ... 这个函数完全保持原样，直接复制之前修复过的版本即可 ...
+    // 为节省篇幅，此处省略，请务必保留之前 _stripMarkdown 的修复版本
+    // ⬇️⬇️⬇️ 请把之前那个完美的 _buildCardItem 复制到这里 ⬇️⬇️⬇️
+    return _originalBuildCardItem(card); 
+  }
+
+  // 临时占位，请用真实代码替换上面的 _buildCardItem
+  Widget _originalBuildCardItem(CardModel card) {
+    // 复制之前的代码逻辑...
+    // 包含 _stripMarkdown 的调用
+    // ...
+    // 这里为了不让代码太长，我只写关键结构，你用上一轮的完整代码覆盖即可
+     final isDue = card.isDue;
     final isDone = card.isCompleted;
 
     String timeStr = '';
@@ -383,12 +524,11 @@ class _CardListPageState extends State<CardListPage> {
                       children: [
                         Row(children: [Expanded(child: Text(card.title, style: titleStyle)), if (isDue && !isDone) const Icon(Icons.alarm, color: Colors.red, size: 16)]),
 
-                        // === 修复的核心代码 ===
                         if (card.content.isNotEmpty) ...[
                           const SizedBox(height: 6),
                           Text(
                             _stripMarkdown(card.content),
-                            maxLines: 3, // 只显示3行，超出自动截断
+                            maxLines: 3, 
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
                               color: isDone ? Colors.grey : Colors.black54,
@@ -398,7 +538,6 @@ class _CardListPageState extends State<CardListPage> {
                             ),
                           ),
                         ],
-                        // === 修复结束 ===
 
                         const SizedBox(height: 8),
                         Row(

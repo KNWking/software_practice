@@ -42,7 +42,7 @@ flutter pub add flutter_markdown
 对于 flask，执行
 
 ```
-pip install flask flask-sqlalchemy flask-cors
+pip install flask flask-sqlalchemy flask-cors flask-jwt-extended
 ```
 
 `card_backend` 中的 `uploads` 文件夹用来存储图片等文件。
