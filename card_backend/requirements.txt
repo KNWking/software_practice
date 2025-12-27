@@ -1,0 +1,4 @@
+flask ~= 3.1
+flask-cors ~= 6.0
+flask-jwt-extended ~= 4.7
+flask-sqlalchemy ~= 3.1
