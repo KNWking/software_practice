@@ -1,37 +1,22 @@
-import os
 import json
-import logging
-from flask import Flask, request, jsonify, send_from_directory
-from flask_sqlalchemy import SQLAlchemy
-from flask_cors import CORS
-from werkzeug.utils import secure_filename
-from werkzeug.security import generate_password_hash, check_password_hash
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+import os
 from datetime import datetime, timedelta
 
-app = Flask(__name__)
-
-# === CORS 配置 ===
-# 允许所有来源，允许 Content-Type 和 Authorization 头，允许跨域携带凭证
-CORS(app,
-     resources={r"/*": {"origins": "*"}},
-     supports_credentials=True,
-     allow_headers=["Content-Type", "Authorization", "Access-Control-Allow-Credentials"])
-
-# === 请求日志 ===
-@app.before_request
-def log_request_info():
-    # 这样你能在终端看到每次前端发来的请求
-    print(f"Request: {request.method} {request.url}")
-    # 如果是 OPTIONS 请求（预检），直接放行
-    if request.method == "OPTIONS":
-        return jsonify({'status': 'ok'}), 200
+from data_models import Card, MetaData, User
+from extensions import cors, db, jwt
+from flask import Flask, Response, jsonify, request, send_from_directory
+from flask_jwt_extended import (create_access_token, get_jwt_identity,
+                                jwt_required)
+from werkzeug.utils import secure_filename
 
 # === 配置部分 (适配云端部署) ===
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'uploads')
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+
+# === 创建 Flask 应用实例 ===
+app = Flask(__name__)
 
 # 生产环境建议将密钥放入环境变量
 app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'default-dev-secret-key')
@@ -42,67 +27,17 @@ app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(BASE_DIR, 'c
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-db = SQLAlchemy(app)
-jwt = JWTManager(app)
 
+# === 初始化扩展 ===
+db.init_app(app)
+jwt.init_app(app)
 
-# === 数据模型 ===
-
-class User(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    username = db.Column(db.String(80), unique=True, nullable=False)
-    password_hash = db.Column(db.String(128), nullable=False)
-
-    def set_password(self, password):
-        self.password_hash = generate_password_hash(password)
-
-    def check_password(self, password):
-        return check_password_hash(self.password_hash, password)
-
-
-class Card(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)  # 关联用户
-    title = db.Column(db.String(100), nullable=False)
-    content = db.Column(db.Text, nullable=True)
-    images_json = db.Column(db.Text, default='[]')
-    group_name = db.Column(db.String(50), default='默认清单')
-    tags = db.Column(db.String(200), default='')
-    is_marked = db.Column(db.Boolean, default=False)
-    is_completed = db.Column(db.Boolean, default=False)
-    created_at = db.Column(db.DateTime, default=datetime.now)
-    reminder_type = db.Column(db.String(20), default='none')
-    reminder_value = db.Column(db.String(50), default='')
-    last_reviewed = db.Column(db.DateTime, default=datetime.now)
-
-    def to_dict(self):
-        try:
-            filenames = json.loads(self.images_json)
-        except:
-            filenames = []
-        # 云端部署时，注意这里 request.host_url 会自动适配域名/IP
-        img_urls = [f"{request.host_url}uploads/{fn}" for fn in filenames]
-        return {
-            'id': self.id,
-            'title': self.title,
-            'content': self.content,
-            'image_urls': img_urls,
-            'group_name': self.group_name,
-            'tags': self.tags,
-            'is_marked': self.is_marked,
-            'is_completed': self.is_completed,
-            'created_at': self.created_at.isoformat(),
-            'reminder_type': self.reminder_type,
-            'reminder_value': self.reminder_value,
-            'last_reviewed': self.last_reviewed.isoformat() if self.last_reviewed else None
-        }
-
-
-class MetaData(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)  # 每个用户有自己的分组配置
-    groups_json = db.Column(db.Text, default='["默认清单", "工作", "生活"]')
-    tags_json = db.Column(db.Text, default='["高优先级", "中优先级", "低优先级"]')
+# 允许所有来源，允许 Content-Type 和 Authorization 头，允许跨域携带凭证
+cors.init_app(app,
+     resources={r"/*": {"origins": "*"}},
+     supports_credentials=True,
+     allow_headers=["Content-Type", "Authorization", "Access-Control-Allow-Credentials"],
+     max_age=timedelta(hours=1))
 
 
 # === 辅助函数 ===
@@ -132,8 +67,8 @@ def get_or_create_meta(user_id):
         # 调试日志
         print(f"--- Creating default meta for user {user_id} ---")
         # 定义默认 JSON 字符串
-        default_groups = json.dumps(["默认清单", "学习", "工作"])
-        default_tags = json.dumps(["高优先级", "中优先级", "低优先级"])
+        default_groups = json.dumps(["默认清单", "学习", "工作"], ensure_ascii=False)
+        default_tags = json.dumps(["高优先级", "中优先级", "低优先级"], ensure_ascii=False)
 
         # 创建时显式赋值，而不是依赖数据库的 default
         meta = MetaData(
@@ -148,6 +83,21 @@ def get_or_create_meta(user_id):
         db.session.refresh(meta)
 
     return meta
+
+
+# === 预检请求 ===
+
+@app.before_request
+def process_options_request():
+    if request.method != "OPTIONS":
+        return
+
+    # 预检请求无需响应体，保持空返回
+    # 此处不应当使用 204 No Content，因为某些浏览器错误地认为该资源同样为空，不发送后续请求以获取该资源
+    # Flask 目前不支持移除 Content-Length 头，此处不做修改，保持默认行为 (Content-Length: 0)
+    response = Response(status=200)
+    response.headers.pop('Content-Type', None)
+    return response
 
 
 # === 认证接口 ===
@@ -170,7 +120,6 @@ def register():
     db.session.commit()
 
     return jsonify({'message': '注册成功'}), 201
-
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
@@ -204,8 +153,8 @@ def update_meta():
     current_user_id = get_jwt_identity()
     meta = get_or_create_meta(current_user_id)
     data = request.json
-    if 'groups' in data: meta.groups_json = json.dumps(data['groups'])
-    if 'tags' in data: meta.tags_json = json.dumps(data['tags'])
+    if 'groups' in data: meta.groups_json = json.dumps(data['groups'], ensure_ascii=False)
+    if 'tags' in data: meta.tags_json = json.dumps(data['tags'], ensure_ascii=False)
     db.session.commit()
     return jsonify({'message': 'Updated'})
 
@@ -223,7 +172,7 @@ def delete_group_api():
     groups = json.loads(meta.groups_json)
     if target_group in groups:
         groups.remove(target_group)
-        meta.groups_json = json.dumps(groups)
+        meta.groups_json = json.dumps(groups, ensure_ascii=False)
     db.session.commit()
     return jsonify({'message': 'Group deleted'})
 
@@ -245,7 +194,7 @@ def delete_tag_api():
     tags = json.loads(meta.tags_json)
     if target_tag in tags:
         tags.remove(target_tag)
-        meta.tags_json = json.dumps(tags)
+        meta.tags_json = json.dumps(tags, ensure_ascii=False)
     db.session.commit()
     return jsonify({'message': 'Tag deleted'})
 
@@ -287,7 +236,7 @@ def create_card():
         user_id=current_user_id,  # 绑定用户
         title=data.get('title'),
         content=data.get('content', ''),
-        images_json=json.dumps(data.get('image_paths', [])),
+        images_json=json.dumps(data.get('image_paths', []), ensure_ascii=False),
         group_name=data.get('group_name', '默认清单'),
         tags=data.get('tags', ''),
         is_marked=data.get('is_marked', False),
@@ -313,7 +262,7 @@ def update_card(id):
     card.title = data.get('title', card.title)
     card.content = data.get('content', card.content)
     if 'image_paths' in data:
-        card.images_json = json.dumps(data['image_paths'])
+        card.images_json = json.dumps(data['image_paths'], ensure_ascii=False)
     card.group_name = data.get('group_name', card.group_name)
     card.tags = data.get('tags', card.tags)
     card.is_marked = data.get('is_marked', card.is_marked)
@@ -340,8 +289,5 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()
 
-    # 调试用
-    print("Backend running on http://127.0.0.1:5000")
-
     # 注意：部署到云端时通常使用 Gunicorn，不直接用 app.run
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='localhost', port=5000)

@@ -27,3 +27,16 @@ doc/api/
 
 .flutter-plugins
 .flutter-plugins-dependencies
+
+# Python bytecode files and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+
+# Database files and uploads
+uploads/
+*.db
+
+# VS Code settings
+.vscode/
